@@ -4,21 +4,28 @@ A comprehensive data warehouse solution for healthcare analytics, integrating ho
 
 ## 📋 Table of Contents
 
-- [Overview](#overview)
-- [Features](#features)
-- [System Architecture](#system-architecture)
-- [Data Sources](#data-sources)
-- [Installation](#installation)
-- [Usage](#usage)
-- [ETL Process](#etl-process)
-- [Data Warehouse Design](#data-warehouse-design)
-- [Analytical Capabilities](#analytical-capabilities)
-- [Optimization Techniques](#optimization-techniques)
-- [Slowly Changing Dimensions (SCD)](#slowly-changing-dimensions-scd)
-- [Performance Considerations](#performance-considerations)
-- [Project Structure](#project-structure)
-- [Contributing](#contributing)
-- [License](#license)
+- [Overview](#-overview)
+- [Features](#-features)
+- [System Architecture](#️-system-architecture)
+- [Data Sources](#-data-sources)
+- [Installation](#-installation)
+- [Usage](#-usage)
+- [ETL Process](#-etl-process)
+- [Data Warehouse Design](#️-data-warehouse-design)
+- [Analytical Capabilities](#-analytical-capabilities)
+  - [Query 1: Treatment Cost Analysis by Demographics](#query-1-treatment-cost-analysis-by-demographics)
+  - [Query 2: Medication Stock Level Analysis & Trend Monitoring](#query-2-medication-stock-level-analysis--trend-monitoring)
+  - [Query 3: Disease Outbreak & Hospital Visit Correlation Analysis](#query-3-disease-outbreak--hospital-visit-correlation-analysis)
+- [Slowly Changing Dimensions (SCD)](#-slowly-changing-dimensions-scd)
+  - [SCD Implementation Strategy](#scd-implementation-strategy)
+  - [Medication SCD Example (Real Project Implementation)](#medication-scd-example-real-project-implementation)
+  - [SCD Processing in ETL Pipeline](#scd-processing-in-etl-pipeline)
+  - [SCD Impact on Analytics](#scd-impact-on-analytics)
+- [Optimization Techniques](#-optimization-techniques)
+- [Performance Considerations](#-performance-considerations)
+- [Project Structure](#-project-structure)
+- [Contributing](#-contributing)
+- [License](#-license)
 
 ## 🎯 Overview
 
@@ -89,7 +96,7 @@ This project implements a healthcare data warehouse by integrating data from hos
 
 ### Prerequisites
 - Java 8 or higher
-- MySQL/PostgreSQL database
+- PostgreSQL database
 - JDBC drivers
 - Maven (for dependency management)
 
@@ -107,16 +114,16 @@ This project implements a healthcare data warehouse by integrating data from hos
    CREATE DATABASE hospital_db;
    
    -- Create data warehouse database
-   CREATE DATABASE healthcare_dwh;
+   CREATE DATABASE dwh_hospital;
    ```
 
 3. **Configure Database Connection**
    ```properties
    # Update database connection settings
-   db.source.url=jdbc:mysql://localhost:3306/hospital_db
-   db.warehouse.url=jdbc:mysql://localhost:3306/healthcare_dwh
-   db.username=your_username
-   db.password=your_password
+   db.source.url=jdbc:postgresql://localhost:5432/hospital_db
+   db.warehouse.url=jdbc:postgresql://localhost:5432/dwh_hospital
+   db.username=postgres
+   db.password=secure#123
    ```
 
 4. **Build and Run**
@@ -457,6 +464,151 @@ private static Connection getConnection() throws SQLException {
 4. **Connection Management**: Proper resource cleanup with try-with-resources
 5. **Batch Processing**: Query 2 implements efficient batch data processing
 
+## 🔄 Slowly Changing Dimensions (SCD)
+
+The healthcare data warehouse implements SCD Type 0 (No Changes) strategy for maintaining dimensional integrity while supporting analytical requirements.
+
+### SCD Type 0 Implementation - Fixed Dimensions
+
+**SCD Type 0** is implemented where dimensional attributes remain constant throughout their lifecycle, ensuring data consistency and simplifying analytical queries.
+
+#### Medication Dimension Example (Project Implementation)
+
+Based on the actual project implementation in [Query 2](#query-2-medication-stock-level-analysis--trend-monitoring), medications demonstrate SCD Type 0 approach where core attributes remain unchanged:
+
+**Medication Core Attributes (SCD Type 0):**
+- `med_id`: Fixed medication identifier
+- `med_name`: Medication name remains constant
+- Supplier information and basic medication properties
+
+**Variable Attributes (Tracked in Fact Tables):**
+- `used_stock`: Changes tracked in fact_medicine
+- `current_stock`: Changes tracked in fact_medicine  
+- `last_updated`: Timestamp for change tracking
+
+#### Real Project Implementation
+```java
+// Query 2 implementation showing historical tracking without dimension changes
+private ArrayList<Query_Entity> runQuery2() {
+    String query = """
+    SELECT fact_medicine.med_id,
+           dim_medication.med_name,
+           fact_medicine.used_stock,
+           fact_medicine.current_stock,
+           fact_medicine.last_updated
+    FROM fact_medicine
+    JOIN dim_medication
+      ON fact_medicine.med_id = dim_medication.med_id;
+    """;
+    
+    ArrayList<Query_Entity> queries = new ArrayList<>();
+    // ... implementation continues as shown in Query 2
+    return queries;
+}
+
+// Historical grouping while maintaining fixed dimensions
+public ArrayList<ArrayList<Query_Entity>> query2Data() {
+    ArrayList<Query_Entity> arrayList = runQuery2();
+    ArrayList<ArrayList<Query_Entity>> query = new ArrayList<>();
+    HashSet<Integer> visitedMedIds = new HashSet<>();
+
+    for (Query_Entity entity : arrayList) {
+        int medId = entity.getMedId();
+        if (visitedMedIds.contains(medId)) continue;
+
+        ArrayList<Query_Entity> group = new ArrayList<>();
+        for (Query_Entity check : arrayList) {
+            if (check.getMedId() == medId) {
+                group.add(check);
+            }
+        }
+
+        // Groups by fixed med_id with different timestamps
+        HashSet<String> uniqueDates = new HashSet<>();
+        for (Query_Entity e : group) {
+            uniqueDates.add(e.getLastUpdated());
+        }
+
+        if (uniqueDates.size() > 1) {
+            query.add(group);  // Historical tracking via fact table
+        }
+        visitedMedIds.add(medId);
+    }
+    return query;
+}
+```
+
+#### SCD Type 0 Schema Design
+```sql
+-- dim_medication: Fixed attributes (SCD Type 0)
+CREATE TABLE dim_medication (
+    med_id INTEGER PRIMARY KEY,
+    med_name VARCHAR(100) NOT NULL,
+    category VARCHAR(50),
+    supplier_id INTEGER,
+    unit_price DECIMAL(10,2)
+);
+
+-- fact_medicine: Variable attributes tracked over time
+CREATE TABLE fact_medicine (
+    fact_id SERIAL PRIMARY KEY,
+    med_id INTEGER REFERENCES dim_medication(med_id),
+    used_stock INTEGER,
+    current_stock INTEGER,
+    last_updated TIMESTAMP
+);
+```
+
+#### Benefits of SCD Type 0 in Healthcare Context
+
+**Advantages:**
+- **Simplicity**: No complex versioning or historical tracking in dimensions
+- **Performance**: Faster queries without date range filtering
+- **Data Integrity**: Fixed medication identifiers prevent confusion
+- **Regulatory Compliance**: Core medication data remains consistent
+
+**Use Cases:**
+- **Medication Identifiers**: Drug codes and names don't change
+- **Patient Identifiers**: Core patient demographics remain fixed
+- **Hospital Information**: Basic hospital details stay constant
+- **Diagnosis Codes**: Medical classification codes are standardized
+
+#### Historical Analysis with SCD Type 0
+
+The project achieves historical analysis through fact table timestamps while keeping dimensions stable:
+
+```sql
+-- Track medication usage over time (SCD Type 0 + Fact History)
+SELECT 
+    dm.med_name,
+    fm.current_stock,
+    fm.used_stock,
+    fm.last_updated
+FROM fact_medicine fm
+JOIN dim_medication dm ON fm.med_id = dm.med_id
+WHERE fm.med_id = 101
+ORDER BY fm.last_updated;
+```
+
+**Sample Output from Project:**
+```
+Medication Trend Analysis:
+
+MedID: 101
+Medicine Name: Insulin
+Used Stock: 45
+Current Stock: 155
+LastUpdated: 2024-03-15
+
+MedID: 101
+Medicine Name: Insulin  
+Used Stock: 67
+Current Stock: 133
+LastUpdated: 2024-04-15
+```
+
+This approach maintains fixed dimension attributes (med_id, med_name) while tracking changes in fact attributes (stock levels, timestamps).
+
 ## ⚡ Optimization Techniques
 
 ### Schema-Level Optimizations
@@ -480,13 +632,23 @@ private static Connection getConnection() throws SQLException {
 - Parallel processing where applicable
 - Incremental loading strategies
 
+### Operational Optimizations
+- Elimination of redundant dimensions
+- Historical data summarization
+- Predefined aggregation levels
+- Strategic SCD implementation
+
 ## 📊 Performance Considerations
 
-- **Strategic Joining**: Direct joins without complex multi-table operations
-- **Effective Grouping**: Multi-dimensional grouping for meaningful segments
-- **Result Optimization**: Sorting by impact for prioritized analysis
-- **Prepared Statements**: Optimized database interactions
-- **Memory Management**: Efficient handling of large datasets
+The query implementation demonstrates several key performance optimization strategies:
+
+1. **Strategic Joining**: All queries use direct joins between fact and dimension tables without complex multi-table joins
+2. **Effective Grouping**: Query 1 uses multi-dimensional grouping to create meaningful analytical segments
+3. **Result Sorting**: Query 3 uses ORDER BY to prioritize high-impact results for immediate attention
+4. **Post-Query Processing**: Query 2 implements Java-based post-processing to perform complex temporal analysis
+5. **Prepared Statements**: All queries use PreparedStatement objects for optimal database interaction
+6. **Connection Pooling**: Efficient database connection management
+7. **Memory Management**: Optimized data structure usage for large result sets
 
 ## 📁 Project Structure
 
@@ -514,17 +676,17 @@ healthcare-data-warehouse/
 │   │   │   │       └── SCDLoader.java
 │   │   │   ├── utils/
 │   │   │   │   └── FiltersHelperMethod.java
-            │   │   │   ├── analytics/
-│   │   │   │   │   ├── AnalyticsEngine.java
-│   │   │   │   │   └── Queries.java
-│   │   │   │   └── entities/
-│   │   │   │       └── Query_Entity.java
+│   │   │   ├── analytics/
+│   │   │   │   ├── AnalyticsEngine.java
+│   │   │   │   └── Queries.java
+│   │   │   └── entities/
+│   │   │       └── Query_Entity.java
 │   │   └── resources/
 │   │       ├── config/
 │   │       │   └── database.properties
 │   │       └── sql/
 │   │           ├── schema/
-│   │                       └── queries/
+│   │           └── queries/
 │               ├── analytics/
 │               │   ├── treatment_cost_analysis.sql
 │               │   ├── medication_stock_analysis.sql
@@ -565,6 +727,7 @@ healthcare-data-warehouse/
 This project is part of an academic assignment for the Data Warehousing course at Mehran UET, Department of Software Engineering.
 
 **Student**: Syed Abdullah Ali (23SW082)  
+**Instructor**: Dr. Naeem Ahmed  
 **Course**: Data Warehousing  
 **Institution**: Mehran University of Engineering & Technology
 
